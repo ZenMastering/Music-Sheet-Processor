@@ -1,0 +1,11 @@
+[project]
+name = "music-transcriber-mvp"
+version = "0.1.0"
+description = "AI-powered music to sheet music transcription MVP"
+requires-python = ">=3.11"
+
+[tool.black]
+line-length = 88
+
+[tool.ruff]
+line-length = 88
