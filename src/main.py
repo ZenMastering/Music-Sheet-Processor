@@ -4,6 +4,9 @@ from basic_pitch.inference import predict
 import librosa
 import os
 import pretty_midi
+import platform
+import subprocess
+from fractions import Fraction
 
 # -----------------------------
 # APP CONFIG
@@ -16,9 +19,11 @@ app = ctk.CTk()
 app.title("Music Sheet Processor")
 app.geometry("700x500")
 
+sr_global = None
 selected_file = None
 processed_audio = None
-sr_global = None
+processed_file = None
+
 
 # -----------------------------
 # FUNCTIONS
@@ -39,7 +44,7 @@ def upload_audio():
         status_label.configure(text="Ready to transcribe")
 
 def preprocess_audio():
-    global selected_file
+    global selected_file, processed_file
 
     if not selected_file:
         status_label.configure(text="No audio file selected")
@@ -55,7 +60,7 @@ def preprocess_audio():
         temp_file = "temp_clean.wav"
         sf.write(temp_file, audio, sr)
 
-        selected_file = temp_file
+        processed_file = temp_file
 
         status_label.configure(text="Preprocessed ✔")
 
@@ -63,20 +68,20 @@ def preprocess_audio():
         status_label.configure(text=f"Error:\n{str(e)}")
 
 def transcribe_audio():
-    global selected_file
+    global processed_file
 
-    if not selected_file:
-        status_label.configure(text="No audio file selected")
+    if not processed_file:
+        status_label.configure(text="You need to process the file first")
         return
 
     try:
         status_label.configure(text="Transcribing...")
 
-        model_output, midi_data, note_events = predict(selected_file)
+        model_output, midi_data, note_events = predict(processed_file)
 
         # tempo alignment algorithm
         audio_for_tempo, sr_for_tempo = librosa.load(
-            selected_file,
+            processed_file,
             sr=22050,
             mono=True
         )
@@ -93,9 +98,6 @@ def transcribe_audio():
         )
 
         beat_duration = 60.0 / tempo
-        grid_size = beat_duration / 4
-
-
 
         filtered_notes = [
             n for n in note_events
@@ -108,8 +110,16 @@ def transcribe_audio():
 
         for note in filtered_notes:
             pitch = int(note[2])    # MIDI pitch
-            start = quantize_time(float(note[0]), grid_size)
-            end = quantize_time(float(note[1]), grid_size)
+            start, end = quantize_note_event(
+                float(note[0]),
+                float(note[1]),
+                beat_duration,
+                max_denominator=16,
+                min_duration=beat_duration / 16
+            )
+
+            if end <= start:
+                end = start + beat_duration / 16
             instrument.notes.append(
                 pretty_midi.Note(
                     velocity=100,
@@ -121,22 +131,72 @@ def transcribe_audio():
         
         midi.instruments.append(instrument)
 
+        # dev version of file designation
         output_name = "output.mid"
         midi.write(output_name)
-
         status_label.configure(
             text=f"Transcription complete!\nSaved as {output_name}"
         )
-        os.startfile(output_name)
+        
+        open_file(output_name)
+        # # official name and directory designation
+        # output_name = filedialog.asksaveasfilename(
+        #     defaultextension=".mid",
+        #     filetypes=[("MIDI Files", "*.mid")],
+        #     initialfile="output.mid"
+        # )
+
+        # if not output_name:
+        #     return
+
+        # midi.write(output_name)
+        # status_label.configure(
+        #     text=f"Transcription complete!\nSaved as {output_name}"
+        # )
+        # open_file(output_name)
     except Exception as e:
         status_label.configure(text=f"Error:\n{str(e)}")
 
 # -----------------------------
 # Helper Functions
 # -----------------------------
+
 def quantize_time(time, grid_size):
     return round(time / grid_size) * grid_size
 
+
+def quantize_musical(time, beat_duration, max_denominator=16):
+    """Snap time to a musical fraction of the beat."""
+    ratio = Fraction(time / beat_duration).limit_denominator(max_denominator)
+    return float(ratio) * beat_duration
+
+
+def quantize_note_event(start, end, beat_duration, max_denominator=16, min_duration=None):
+    if min_duration is None:
+        min_duration = beat_duration / max_denominator
+
+    q_start = quantize_musical(start, beat_duration, max_denominator)
+    q_end = quantize_musical(end, beat_duration, max_denominator)
+
+    if q_end <= q_start:
+        q_end = q_start + min_duration
+
+    if q_end - q_start < min_duration:
+        q_end = q_start + min_duration
+
+    return q_start, q_end
+
+
+# Supports multiple platforms
+def open_file(path):
+    system = platform.system()
+
+    if system == "Windows":
+        os.startfile(path)
+    elif system == "Darwin":
+        subprocess.call(["open", path])
+    else:
+        subprocess.call(["xdg-open", path])
 
 # -----------------------------
 # UI
